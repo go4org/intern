@@ -36,6 +36,10 @@ var (
 	valMap = map[interface{}]uintptr{} // to uintptr(*Value)
 )
 
+// We play unsafe games that violate Go's rules (and assume a non-moving
+// collector). So we quiet Go here.
+//go:nocheckptr
+
 // Get returns a pointer representing the comparable value cmpVal.
 //
 // The returned pointer will be the same for Get(v) and Get(v2)
