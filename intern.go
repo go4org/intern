@@ -2,18 +2,20 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-// Package litecmp lets you make smaller comparable values by boxing
+// Package intern lets you make smaller comparable values by boxing
 // a larger comparable value (such as a 16 byte string header) down
 // into a globally unique 8 byte pointer.
 //
 // The globally unique pointers are garbage collected with weak
 // references and finalizers. This package hides that.
-package litecmp
+package intern // import "go4.org/intern"
 
 import (
 	"runtime"
 	"sync"
 	"unsafe"
+
+	_ "go4.org/unsafe/assume-no-moving-gc"
 )
 
 // A Value pointer is the lite handle to an underlying comparable
