@@ -8,6 +8,8 @@
 //
 // The globally unique pointers are garbage collected with weak
 // references and finalizers. This package hides that.
+//
+// The GitHub repo is https://github.com/go4org/intern
 package intern // import "go4.org/intern"
 
 import (
