@@ -20,34 +20,36 @@ import (
 	_ "go4.org/unsafe/assume-no-moving-gc"
 )
 
-// A Value pointer is the lite handle to an underlying comparable
-// value.
-//
-// Because the pointer is globally unique within the process for the comparable value
-// passed to the Get func, the pointer itself can be used as a comparable value.
+// A Value pointer is the handle to an underlying comparable value.
+// See func Get for how Value pointers may be used.
 type Value struct {
 	_      [0]func() // prevent people from accidentally using value type as comparable
 	cmpVal interface{}
-	gen    int64
+	// gen is guarded by mu (for all instances of Value).
+	// It is incremented whenever this Value is returned from Get.
+	gen int64
 }
 
 // Get returns the comparable value passed to the Get func
-// that had returned v.
+// that returned v.
 func (v *Value) Get() interface{} { return v.cmpVal }
 
 var (
+	// mu guards valMap, a weakref map of *Value by underlying value.
+	// It also guards the gen field of all *Values.
 	mu     sync.Mutex
 	valMap = map[interface{}]uintptr{} // to uintptr(*Value)
 )
 
 // We play unsafe games that violate Go's rules (and assume a non-moving
 // collector). So we quiet Go here.
+// See the comment below Get for more implementation details.
 //go:nocheckptr
 
 // Get returns a pointer representing the comparable value cmpVal.
 //
 // The returned pointer will be the same for Get(v) and Get(v2)
-// if and only if v == v2.
+// if and only if v == v2, and can be used as a map key.
 func Get(cmpVal interface{}) *Value {
 	mu.Lock()
 	defer mu.Unlock()
@@ -60,19 +62,19 @@ func Get(cmpVal interface{}) *Value {
 		v = &Value{cmpVal: cmpVal}
 		valMap[cmpVal] = uintptr(unsafe.Pointer(v))
 	}
-	curGen := v.gen + 1
-	v.gen = curGen
+	v.gen++
+	curGen := v.gen // make a copy to use in the closure below
 
 	if curGen > 1 {
-		// Need to clear it before changing it,
-		// else the runtime throws.
+		// Need to clear it before changing it, else the runtime throws.
+		// See https://groups.google.com/g/golang-dev/c/2c8suS1_840.
 		runtime.SetFinalizer(v, nil)
 	}
 	runtime.SetFinalizer(v, func(v *Value) {
 		mu.Lock()
 		defer mu.Unlock()
 		if v.gen != curGen {
-			// Lost the race. Somebody is still using us.
+			// Lost the race. Somebody is still using this *Value.
 			return
 		}
 		delete(valMap, v.cmpVal)
@@ -80,3 +82,49 @@ func Get(cmpVal interface{}) *Value {
 	return v
 
 }
+
+// Interning is simple if you don't require that unused values be garbage collectable.
+// But we do require that; we don't want to be DOS vector.
+// We do this by using a uintptr to hide the pointer from the garbage collector,
+// and using a finalizer to eliminate the pointer when no other code is using it.
+//
+// The obvious implementation of this is to use a map[interface{}]uintptr-of-*interface{},
+// and set up a finalizer to delete from the map.
+// Unfortunately, that contains a logical race.
+// The finalizer can start concurrently with a new request
+// to look up a pointer with no other references to it.
+// The new pointer lookup creates a new reference to an existing (almost-GC-able) pointer.
+// The finalizer then continues to run, deleting the pointer from the map.
+// Future pointer lookups will create a new pointer, breaking the comparability invariant.
+//
+// The finalizer fundamentally needs to know that no other
+// references have been created since this finalizer was set up.
+// There is no external synchronization that can provide that.
+// Instead, every time we create a new Value pointer, we set a new finalizer.
+// That finalizer knows the latest Value pointer at the time that it was created;
+// that is the gen (generation) field in type Value.
+// When the finalizer runs, if its generation differs from the current Value generation,
+// another reference must have been created in the interim,
+// so it should not delete the *Value from the map.
+// Another, later, finalizer will take care of that.
+// The Value generation field is protected by mu, providing a consistent view.
+//
+// @josharian has a mild lingering concern about this approach.
+// It is possible to for the runtime to concurrently decide it needs to _execute_ a finalizer and
+// also _remove_ the need for that finalizer to run, because a new reference has appeared.
+// It is possible that this could cause a data race in the runtime.
+// This is not a normal thing to have happen; it requires unsafe hiding of a pointer in a uintptr.
+// It thus might not be tested for or protected against in the runtime.
+// Hopefully this will not prove to be a problem in practice.
+//
+// @ianlancetaylor commented in https://github.com/golang/go/issues/41303#issuecomment-717401656
+// that it is possible to implement weak references in terms of finalizers without unsafe.
+// Unfortunately, the approach he outlined does not work here, for two reasons.
+// First, there is no way to construct a strong pointer out of a weak pointer;
+// our map stores weak pointers, but we must return strong pointers to callers.
+// Second, and more fundamentally, we must return not just _a_ strong pointer to callers,
+// but _the same_ strong pointer to callers.
+// In order to return _the same_ strong pointer to callers, we must track it,
+// which is exactly what we cannot do with strong pointers.
+//
+// See https://github.com/inetaf/netaddr/issues/53 for more discussion.
