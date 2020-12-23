@@ -58,6 +58,40 @@ func wantEmpty(t testing.TB) {
 	}
 }
 
+func TestStress(t *testing.T) {
+	iters := 10000
+	if testing.Short() {
+		iters = 1000
+	}
+	var sink []byte
+	for i := 0; i < iters; i++ {
+		_ = Get("foo")
+		sink = make([]byte, 1<<20)
+	}
+	_ = sink
+}
+
+func BenchmarkStress(b *testing.B) {
+	clearMap()
+	v1 := Get("foo")
+	b.RunParallel(func(pb *testing.PB) {
+		var sink []byte
+		for pb.Next() {
+			v2 := Get("foo")
+			if v1 != v2 {
+				b.Fatal("wrong value")
+			}
+			// And also a key we don't retain:
+			_ = Get("bar")
+			// And allocate some garbage to force GCs:
+			sink = make([]byte, 1<<20)
+		}
+		_ = sink
+	})
+	runtime.GC()
+	wantEmpty(b)
+}
+
 func mapLen() int {
 	mu.Lock()
 	defer mu.Unlock()

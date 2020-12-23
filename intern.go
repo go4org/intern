@@ -25,9 +25,9 @@ import (
 type Value struct {
 	_      [0]func() // prevent people from accidentally using value type as comparable
 	cmpVal interface{}
-	// gen is guarded by mu (for all instances of Value).
+	// refs is guarded by mu (for all instances of Value).
 	// It is incremented whenever this Value is returned from Get.
-	gen int64
+	refs int64
 }
 
 // Get returns the comparable value passed to the Get func
@@ -36,7 +36,7 @@ func (v *Value) Get() interface{} { return v.cmpVal }
 
 var (
 	// mu guards valMap, a weakref map of *Value by underlying value.
-	// It also guards the gen field of all *Values.
+	// It also guards the refs field of all *Values.
 	mu     sync.Mutex
 	valMap = map[interface{}]uintptr{} // to uintptr(*Value)
 )
@@ -58,29 +58,24 @@ func Get(cmpVal interface{}) *Value {
 	var v *Value
 	if ok {
 		v = (*Value)((unsafe.Pointer)(addr))
-	} else {
-		v = &Value{cmpVal: cmpVal}
-		valMap[cmpVal] = uintptr(unsafe.Pointer(v))
+		v.refs++
+		return v
 	}
-	v.gen++
-	curGen := v.gen // make a copy to use in the closure below
-
-	if curGen > 1 {
-		// Need to clear it before changing it, else the runtime throws.
-		// See https://groups.google.com/g/golang-dev/c/2c8suS1_840.
-		runtime.SetFinalizer(v, nil)
-	}
-	runtime.SetFinalizer(v, func(v *Value) {
-		mu.Lock()
-		defer mu.Unlock()
-		if v.gen != curGen {
-			// Lost the race. Somebody is still using this *Value.
-			return
-		}
-		delete(valMap, v.cmpVal)
-	})
+	v = &Value{cmpVal: cmpVal, refs: 1}
+	valMap[cmpVal] = uintptr(unsafe.Pointer(v))
+	runtime.SetFinalizer(v, finalize)
 	return v
+}
 
+func finalize(v *Value) {
+	mu.Lock()
+	defer mu.Unlock()
+	v.refs--
+	if v.refs == 0 {
+		delete(valMap, v.cmpVal)
+		return
+	}
+	runtime.SetFinalizer(v, finalize)
 }
 
 // Interning is simple if you don't require that unused values be garbage collectable.
