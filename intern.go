@@ -13,7 +13,9 @@
 package intern // import "go4.org/intern"
 
 import (
+	"os"
 	"runtime"
+	"strconv"
 	"sync"
 	"unsafe"
 
@@ -37,9 +39,19 @@ func (v *Value) Get() interface{} { return v.cmpVal }
 var (
 	// mu guards valMap, a weakref map of *Value by underlying value.
 	// It also guards the refs field of all *Values.
-	mu     sync.Mutex
-	valMap = map[interface{}]uintptr{} // to uintptr(*Value)
+	mu      sync.Mutex
+	valMap  = map[interface{}]uintptr{} // to uintptr(*Value)
+	valSafe = safeMap()                 // non-nil in safe+leaky mode
 )
+
+// safeMap returns a non-nil map if we're in safe-but-leaky mode,
+// as controlled by GO4_INTERN_SAFE_BUT_LEAKY.
+func safeMap() map[interface{}]*Value {
+	if v, _ := strconv.ParseBool(os.Getenv("GO4_INTERN_SAFE_BUT_LEAKY")); v {
+		return map[interface{}]*Value{}
+	}
+	return nil
+}
 
 // We play unsafe games that violate Go's rules (and assume a non-moving
 // collector). So we quiet Go here.
@@ -54,16 +66,23 @@ func Get(cmpVal interface{}) *Value {
 	mu.Lock()
 	defer mu.Unlock()
 
-	addr, ok := valMap[cmpVal]
 	var v *Value
-	if ok {
+	if valSafe != nil {
+		v = valSafe[cmpVal]
+	} else if addr, ok := valMap[cmpVal]; ok {
 		v = (*Value)((unsafe.Pointer)(addr))
+	}
+	if v != nil {
 		v.refs++
 		return v
 	}
 	v = &Value{cmpVal: cmpVal, refs: 1}
-	valMap[cmpVal] = uintptr(unsafe.Pointer(v))
-	runtime.SetFinalizer(v, finalize)
+	if valSafe != nil {
+		valSafe[cmpVal] = v
+	} else {
+		valMap[cmpVal] = uintptr(unsafe.Pointer(v))
+		runtime.SetFinalizer(v, finalize)
+	}
 	return v
 }
 
