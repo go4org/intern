@@ -27,9 +27,9 @@ import (
 type Value struct {
 	_      [0]func() // prevent people from accidentally using value type as comparable
 	cmpVal interface{}
-	// refs is guarded by mu (for all instances of Value).
-	// It is incremented whenever this Value is returned from Get.
-	refs int64
+	// resurrected is guarded by mu (for all instances of Value).
+	// It is set true whenever v is synthesized from a uintptr.
+	resurrected bool
 }
 
 // Get returns the comparable value passed to the Get func
@@ -38,7 +38,7 @@ func (v *Value) Get() interface{} { return v.cmpVal }
 
 var (
 	// mu guards valMap, a weakref map of *Value by underlying value.
-	// It also guards the refs field of all *Values.
+	// It also guards the resurrected field of all *Values.
 	mu      sync.Mutex
 	valMap  = map[interface{}]uintptr{} // to uintptr(*Value)
 	valSafe = safeMap()                 // non-nil in safe+leaky mode
@@ -71,12 +71,12 @@ func Get(cmpVal interface{}) *Value {
 		v = valSafe[cmpVal]
 	} else if addr, ok := valMap[cmpVal]; ok {
 		v = (*Value)((unsafe.Pointer)(addr))
+		v.resurrected = true
 	}
 	if v != nil {
-		v.refs++
 		return v
 	}
-	v = &Value{cmpVal: cmpVal, refs: 1}
+	v = &Value{cmpVal: cmpVal}
 	if valSafe != nil {
 		valSafe[cmpVal] = v
 	} else {
@@ -89,12 +89,14 @@ func Get(cmpVal interface{}) *Value {
 func finalize(v *Value) {
 	mu.Lock()
 	defer mu.Unlock()
-	v.refs--
-	if v.refs == 0 {
-		delete(valMap, v.cmpVal)
+	if v.resurrected {
+		// We lost the race. Somebody resurrected it while we
+		// were about to finalize it. Try again next round.
+		v.resurrected = false
+		runtime.SetFinalizer(v, finalize)
 		return
 	}
-	runtime.SetFinalizer(v, finalize)
+	delete(valMap, v.cmpVal)
 }
 
 // Interning is simple if you don't require that unused values be garbage collectable.
