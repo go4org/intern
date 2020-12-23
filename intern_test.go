@@ -10,6 +10,7 @@ import (
 )
 
 func TestBasics(t *testing.T) {
+	clearMap()
 	foo := Get("foo")
 	bar := Get("bar")
 	foo2 := Get("foo")
@@ -39,6 +40,11 @@ func TestBasics(t *testing.T) {
 		t.Errorf("map len = %d; want 2", n)
 	}
 
+	wantEmpty(t)
+}
+
+func wantEmpty(t testing.TB) {
+	t.Helper()
 	const gcTries = 5000
 	for try := 0; try < gcTries; try++ {
 		runtime.GC()
@@ -47,7 +53,7 @@ func TestBasics(t *testing.T) {
 			break
 		}
 		if try == gcTries-1 {
-			t.Errorf("map len = %d after (%d GC tries); want 0", gcTries, try)
+			t.Errorf("map len = %d after (%d GC tries); want 0", n, gcTries)
 		}
 	}
 }
@@ -56,4 +62,12 @@ func mapLen() int {
 	mu.Lock()
 	defer mu.Unlock()
 	return len(valMap)
+}
+
+func clearMap() {
+	mu.Lock()
+	defer mu.Unlock()
+	for k := range valMap {
+		delete(valMap, k)
+	}
 }
