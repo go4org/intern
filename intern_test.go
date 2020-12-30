@@ -115,3 +115,21 @@ func clearMap() {
 		delete(valMap, k)
 	}
 }
+
+var globalString = "not a constant"
+
+func TestGetByStringAllocs(t *testing.T) {
+	allocs := int(testing.AllocsPerRun(100, func() {
+		GetByString(globalString)
+	}))
+	if allocs != 0 {
+		t.Errorf("GetString allocated %d objects, want 0", allocs)
+	}
+}
+
+func BenchmarkGetByString(b *testing.B) {
+	b.ReportAllocs()
+	for i := 0; i < b.N; i++ {
+		GetByString(globalString)
+	}
+}

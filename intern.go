@@ -86,6 +86,33 @@ func Get(cmpVal interface{}) *Value {
 	return v
 }
 
+// GetByString is identical to Get, except that it is specialized for strings.
+// This avoids an allocation from putting a string into an interface{}
+// to pass as an argument to Get.
+func GetByString(s string) *Value {
+	mu.Lock()
+	defer mu.Unlock()
+
+	var v *Value
+	if valSafe != nil {
+		v = valSafe[s]
+	} else if addr, ok := valMap[s]; ok {
+		v = (*Value)((unsafe.Pointer)(addr))
+		v.resurrected = true
+	}
+	if v != nil {
+		return v
+	}
+	v = &Value{cmpVal: s}
+	if valSafe != nil {
+		valSafe[s] = v
+	} else {
+		valMap[s] = uintptr(unsafe.Pointer(v))
+		runtime.SetFinalizer(v, finalize)
+	}
+	return v
+}
+
 func finalize(v *Value) {
 	mu.Lock()
 	defer mu.Unlock()
