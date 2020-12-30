@@ -72,10 +72,23 @@ func TestStress(t *testing.T) {
 }
 
 func BenchmarkStress(b *testing.B) {
+	done := make(chan struct{})
+	defer close(done)
+	go func() {
+		for {
+			select {
+			case <-done:
+				return
+			default:
+			}
+			runtime.GC()
+		}
+	}()
+
 	clearMap()
 	v1 := Get("foo")
+	b.ReportAllocs()
 	b.RunParallel(func(pb *testing.PB) {
-		var sink []byte
 		for pb.Next() {
 			v2 := Get("foo")
 			if v1 != v2 {
@@ -83,10 +96,7 @@ func BenchmarkStress(b *testing.B) {
 			}
 			// And also a key we don't retain:
 			_ = Get("bar")
-			// And allocate some garbage to force GCs:
-			sink = make([]byte, 1<<20)
 		}
-		_ = sink
 	})
 	runtime.GC()
 	wantEmpty(b)
