@@ -36,51 +36,79 @@ type Value struct {
 // that returned v.
 func (v *Value) Get() interface{} { return v.cmpVal }
 
+// key is a key in our global value map.
+// It contains type-specialized fields to avoid allocations
+// when converting common types to empty interfaces.
+type key struct {
+	s      string
+	cmpVal interface{}
+	// isString reports whether key contains a string.
+	// Without it, the zero value of key is ambiguous.
+	isString bool
+}
+
 var (
 	// mu guards valMap, a weakref map of *Value by underlying value.
 	// It also guards the resurrected field of all *Values.
 	mu      sync.Mutex
-	valMap  = map[interface{}]uintptr{} // to uintptr(*Value)
-	valSafe = safeMap()                 // non-nil in safe+leaky mode
+	valMap  = map[key]uintptr{} // to uintptr(*Value)
+	valSafe = safeMap()         // non-nil in safe+leaky mode
 )
 
 // safeMap returns a non-nil map if we're in safe-but-leaky mode,
 // as controlled by GO4_INTERN_SAFE_BUT_LEAKY.
-func safeMap() map[interface{}]*Value {
+func safeMap() map[key]*Value {
 	if v, _ := strconv.ParseBool(os.Getenv("GO4_INTERN_SAFE_BUT_LEAKY")); v {
-		return map[interface{}]*Value{}
+		return map[key]*Value{}
 	}
 	return nil
 }
-
-// We play unsafe games that violate Go's rules (and assume a non-moving
-// collector). So we quiet Go here.
-// See the comment below Get for more implementation details.
-//go:nocheckptr
 
 // Get returns a pointer representing the comparable value cmpVal.
 //
 // The returned pointer will be the same for Get(v) and Get(v2)
 // if and only if v == v2, and can be used as a map key.
 func Get(cmpVal interface{}) *Value {
+	if s, ok := cmpVal.(string); ok {
+		return GetByString(s)
+	}
+	return get(key{cmpVal: cmpVal})
+}
+
+// GetByString is identical to Get, except that it is specialized for strings.
+// This avoids an allocation from putting a string into an interface{}
+// to pass as an argument to Get.
+func GetByString(s string) *Value {
+	return get(key{s: s, isString: true})
+}
+
+// We play unsafe games that violate Go's rules (and assume a non-moving
+// collector). So we quiet Go here.
+// See the comment below Get for more implementation details.
+//go:nocheckptr
+func get(k key) *Value {
 	mu.Lock()
 	defer mu.Unlock()
 
 	var v *Value
 	if valSafe != nil {
-		v = valSafe[cmpVal]
-	} else if addr, ok := valMap[cmpVal]; ok {
+		v = valSafe[k]
+	} else if addr, ok := valMap[k]; ok {
 		v = (*Value)((unsafe.Pointer)(addr))
 		v.resurrected = true
 	}
 	if v != nil {
 		return v
 	}
-	v = &Value{cmpVal: cmpVal}
-	if valSafe != nil {
-		valSafe[cmpVal] = v
+	if k.isString {
+		v = &Value{cmpVal: k.s}
 	} else {
-		valMap[cmpVal] = uintptr(unsafe.Pointer(v))
+		v = &Value{cmpVal: k.cmpVal}
+	}
+	if valSafe != nil {
+		valSafe[k] = v
+	} else {
+		valMap[k] = uintptr(unsafe.Pointer(v))
 		runtime.SetFinalizer(v, finalize)
 	}
 	return v
@@ -96,7 +124,11 @@ func finalize(v *Value) {
 		runtime.SetFinalizer(v, finalize)
 		return
 	}
-	delete(valMap, v.cmpVal)
+	if s, ok := v.cmpVal.(string); ok {
+		delete(valMap, key{s: s, isString: true})
+	} else {
+		delete(valMap, key{cmpVal: v.cmpVal})
+	}
 }
 
 // Interning is simple if you don't require that unused values be
