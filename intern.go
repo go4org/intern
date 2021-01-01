@@ -47,6 +47,22 @@ type key struct {
 	isString bool
 }
 
+// keyFor returns a key to use with cmpVal.
+func keyFor(cmpVal interface{}) key {
+	if s, ok := cmpVal.(string); ok {
+		return key{s: s, isString: true}
+	}
+	return key{cmpVal: cmpVal}
+}
+
+// Value returns a *Value built from k.
+func (k key) Value() *Value {
+	if k.isString {
+		return &Value{cmpVal: k.s}
+	}
+	return &Value{cmpVal: k.cmpVal}
+}
+
 var (
 	// mu guards valMap, a weakref map of *Value by underlying value.
 	// It also guards the resurrected field of all *Values.
@@ -69,10 +85,7 @@ func safeMap() map[key]*Value {
 // The returned pointer will be the same for Get(v) and Get(v2)
 // if and only if v == v2, and can be used as a map key.
 func Get(cmpVal interface{}) *Value {
-	if s, ok := cmpVal.(string); ok {
-		return GetByString(s)
-	}
-	return get(key{cmpVal: cmpVal})
+	return get(keyFor(cmpVal))
 }
 
 // GetByString is identical to Get, except that it is specialized for strings.
@@ -100,11 +113,7 @@ func get(k key) *Value {
 	if v != nil {
 		return v
 	}
-	if k.isString {
-		v = &Value{cmpVal: k.s}
-	} else {
-		v = &Value{cmpVal: k.cmpVal}
-	}
+	v = k.Value()
 	if valSafe != nil {
 		valSafe[k] = v
 	} else {
@@ -124,11 +133,7 @@ func finalize(v *Value) {
 		runtime.SetFinalizer(v, finalize)
 		return
 	}
-	if s, ok := v.cmpVal.(string); ok {
-		delete(valMap, key{s: s, isString: true})
-	} else {
-		delete(valMap, key{cmpVal: v.cmpVal})
-	}
+	delete(valMap, keyFor(v.cmpVal))
 }
 
 // Interning is simple if you don't require that unused values be
