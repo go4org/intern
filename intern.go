@@ -117,8 +117,10 @@ func get(k key) *Value {
 	if valSafe != nil {
 		valSafe[k] = v
 	} else {
-		valMap[k] = uintptr(unsafe.Pointer(v))
+		// SetFinalizer before uintptr conversion (theoretical concern;
+		// see https://github.com/go4org/intern/issues/13)
 		runtime.SetFinalizer(v, finalize)
+		valMap[k] = uintptr(unsafe.Pointer(v))
 	}
 	return v
 }
