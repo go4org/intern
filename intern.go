@@ -66,18 +66,36 @@ func (k key) Value() *Value {
 var (
 	// mu guards valMap, a weakref map of *Value by underlying value.
 	// It also guards the resurrected field of all *Values.
-	mu      sync.Mutex
-	valMap  = map[key]uintptr{} // to uintptr(*Value)
-	valSafe = safeMap()         // non-nil in safe+leaky mode
+	mu        sync.Mutex
+	valMap    = map[key]uintptr{} // to uintptr(*Value)
+	leakyMode = isLeakyMode()     // choose mode of operation once, leaky or unsafe
+	valSafe   = safeMap()         // non-nil in safe+leaky mode
+	get       = chooseGet()
 )
 
-// safeMap returns a non-nil map if we're in safe-but-leaky mode,
+// isLeakyMode return true is in safe-but-leaky mode,
 // as controlled by GO4_INTERN_SAFE_BUT_LEAKY.
-func safeMap() map[key]*Value {
+func isLeakyMode() bool {
 	if v, _ := strconv.ParseBool(os.Getenv("GO4_INTERN_SAFE_BUT_LEAKY")); v {
+		return true
+	}
+	return false
+}
+
+// safeMap returns a non-nil map if we're in safe-but-leaky mode.
+func safeMap() map[key]*Value {
+	if leakyMode {
 		return map[key]*Value{}
 	}
 	return nil
+}
+
+// chooseGet returns the unsafeGet, unless in leakyMode, which returns leakyGet
+func chooseGet() func(k key) *Value {
+	if leakyMode {
+		return leakyGet
+	}
+	return unsafeGet
 }
 
 // Get returns a pointer representing the comparable value cmpVal.
@@ -95,18 +113,32 @@ func GetByString(s string) *Value {
 	return get(key{s: s, isString: true})
 }
 
-// We play unsafe games that violate Go's rules (and assume a non-moving
-// collector). So we quiet Go here.
-// See the comment below Get for more implementation details.
-//go:nocheckptr
-func get(k key) *Value {
+// leakyGet in safe+leaky mode is simple and safe, but may grow forever. It is
+// subjec to DOS attacks
+func leakyGet(k key) *Value {
 	mu.Lock()
 	defer mu.Unlock()
 
 	var v *Value
-	if valSafe != nil {
-		v = valSafe[k]
-	} else if addr, ok := valMap[k]; ok {
+	v = valSafe[k]
+	if v != nil {
+		return v
+	}
+	v = k.Value()
+	valSafe[k] = v
+	return v
+}
+
+// We play unsafe games that violate Go's rules (and assume a non-moving
+// collector). So we quiet Go here.
+// See the comment below Get for more implementation details.
+//go:nocheckptr
+func unsafeGet(k key) *Value {
+	mu.Lock()
+	defer mu.Unlock()
+
+	var v *Value
+	if addr, ok := valMap[k]; ok {
 		v = (*Value)((unsafe.Pointer)(addr))
 		v.resurrected = true
 	}
@@ -114,14 +146,10 @@ func get(k key) *Value {
 		return v
 	}
 	v = k.Value()
-	if valSafe != nil {
-		valSafe[k] = v
-	} else {
-		// SetFinalizer before uintptr conversion (theoretical concern;
-		// see https://github.com/go4org/intern/issues/13)
-		runtime.SetFinalizer(v, finalize)
-		valMap[k] = uintptr(unsafe.Pointer(v))
-	}
+	// SetFinalizer before uintptr conversion (theoretical concern;
+	// see https://github.com/go4org/intern/issues/13)
+	runtime.SetFinalizer(v, finalize)
+	valMap[k] = uintptr(unsafe.Pointer(v))
 	return v
 }
 
