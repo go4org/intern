@@ -114,7 +114,7 @@ func GetByString(s string) *Value {
 }
 
 // leakyGet in safe+leaky mode is simple and safe, but may grow forever. It is
-// subjec to DOS attacks
+// subject to DOS attacks
 func leakyGet(k key) *Value {
 	mu.Lock()
 	defer mu.Unlock()
