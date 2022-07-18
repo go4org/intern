@@ -68,34 +68,24 @@ var (
 	// It also guards the resurrected field of all *Values.
 	mu        sync.Mutex
 	valMap    = map[key]uintptr{} // to uintptr(*Value)
-	leakyMode = isLeakyMode()     // choose mode of operation once, leaky or unsafe
 	valSafe   = safeMap()         // non-nil in safe+leaky mode
-	get       = chooseGet()
 )
 
-// isLeakyMode return true is in safe-but-leaky mode,
+// safeMap returns a non-nil map if we're in safe-but-leaky mode,
 // as controlled by GO4_INTERN_SAFE_BUT_LEAKY.
-func isLeakyMode() bool {
-	if v, _ := strconv.ParseBool(os.Getenv("GO4_INTERN_SAFE_BUT_LEAKY")); v {
-		return true
-	}
-	return false
-}
-
-// safeMap returns a non-nil map if we're in safe-but-leaky mode.
 func safeMap() map[key]*Value {
-	if leakyMode {
+	if v, _ := strconv.ParseBool(os.Getenv("GO4_INTERN_SAFE_BUT_LEAKY")); v {
 		return map[key]*Value{}
 	}
 	return nil
 }
 
-// chooseGet returns the unsafeGet, unless in leakyMode, which returns leakyGet
-func chooseGet() func(k key) *Value {
-	if leakyMode {
-		return leakyGet
+// get runs leakyGet or unsafeGet depending on mode chosen by safeMap earlier
+func get() *Value {
+	if valSafe != nil {
+		return leakyGet()
 	}
-	return unsafeGet
+	return unsafeGet()
 }
 
 // Get returns a pointer representing the comparable value cmpVal.
