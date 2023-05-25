@@ -1,2 +1,2 @@
-go4.org/unsafe/assume-no-moving-gc v0.0.0-20230204201903-c31fa085b70e h1:AY/D6WBvaYJLmXK9VTIAX0tokDhrkkqdvIUwOU2nxio=
-go4.org/unsafe/assume-no-moving-gc v0.0.0-20230204201903-c31fa085b70e/go.mod h1:FftLjUGFEDu5k8lt0ddY+HcrH/qU/0qk+H8j9/nTl3E=
+go4.org/unsafe/assume-no-moving-gc v0.0.0-20230525183740-e7c30c78aeb2 h1:WJhcL4p+YeDxmZWg141nRm7XC8IDmhz7lk5GpadO1Sg=
+go4.org/unsafe/assume-no-moving-gc v0.0.0-20230525183740-e7c30c78aeb2/go.mod h1:FftLjUGFEDu5k8lt0ddY+HcrH/qU/0qk+H8j9/nTl3E=
