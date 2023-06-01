@@ -80,6 +80,14 @@ func safeMap() map[key]*Value {
 	return nil
 }
 
+// get runs leakyGet or unsafeGet depending on mode chosen by safeMap earlier
+func get() *Value {
+	if valSafe != nil {
+		return leakyGet()
+	}
+	return unsafeGet()
+}
+
 // Get returns a pointer representing the comparable value cmpVal.
 //
 // The returned pointer will be the same for Get(v) and Get(v2)
@@ -95,18 +103,32 @@ func GetByString(s string) *Value {
 	return get(key{s: s, isString: true})
 }
 
-// We play unsafe games that violate Go's rules (and assume a non-moving
-// collector). So we quiet Go here.
-// See the comment below Get for more implementation details.
-//go:nocheckptr
-func get(k key) *Value {
+// leakyGet in safe+leaky mode is simple and safe, but may grow forever. It is
+// subject to DOS attacks
+func leakyGet(k key) *Value {
 	mu.Lock()
 	defer mu.Unlock()
 
 	var v *Value
-	if valSafe != nil {
-		v = valSafe[k]
-	} else if addr, ok := valMap[k]; ok {
+	v = valSafe[k]
+	if v != nil {
+		return v
+	}
+	v = k.Value()
+	valSafe[k] = v
+	return v
+}
+
+// We play unsafe games that violate Go's rules (and assume a non-moving
+// collector). So we quiet Go here.
+// See the comment below Get for more implementation details.
+//go:nocheckptr
+func unsafeGet(k key) *Value {
+	mu.Lock()
+	defer mu.Unlock()
+
+	var v *Value
+	if addr, ok := valMap[k]; ok {
 		v = (*Value)((unsafe.Pointer)(addr))
 		v.resurrected = true
 	}
@@ -114,14 +136,10 @@ func get(k key) *Value {
 		return v
 	}
 	v = k.Value()
-	if valSafe != nil {
-		valSafe[k] = v
-	} else {
-		// SetFinalizer before uintptr conversion (theoretical concern;
-		// see https://github.com/go4org/intern/issues/13)
-		runtime.SetFinalizer(v, finalize)
-		valMap[k] = uintptr(unsafe.Pointer(v))
-	}
+	// SetFinalizer before uintptr conversion (theoretical concern;
+	// see https://github.com/go4org/intern/issues/13)
+	runtime.SetFinalizer(v, finalize)
+	valMap[k] = uintptr(unsafe.Pointer(v))
 	return v
 }
 
